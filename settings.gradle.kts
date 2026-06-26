@@ -1,0 +1,1 @@
+rootProject.name = "appium-kotlin-test-framework"

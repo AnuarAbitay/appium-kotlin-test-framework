@@ -1,0 +1,26 @@
+# Every parallel device must have unique Appium and driver ports.
+devices:
+  - id: "android-emulator-1"
+    deviceName: "Pixel_9"
+    platformName: "Android"
+    platformVersion: "15"
+    isEmulator: true
+    avdPort: 5554
+    udid: "emulator-5554"
+    serverPort: 4723
+    systemPort: 8200
+    chromedriverPort: 9515
+    appPackage: "com.example.app"
+    appActivity: "com.example.app.MainActivity"
+    automationName: "UiAutomator2"
+
+  - id: "ios-simulator-1"
+    deviceName: "iPhone 16 Pro"
+    platformName: "iOS"
+    platformVersion: "18.0"
+    isEmulator: true
+    udid: "IOS_SIMULATOR_UDID"
+    serverPort: 4724
+    wdaLocalPort: 8100
+    bundleId: "com.example.app"
+    automationName: "XCUITest"
