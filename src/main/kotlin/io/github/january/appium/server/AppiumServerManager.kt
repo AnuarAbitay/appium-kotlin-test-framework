@@ -17,15 +17,15 @@ class AppiumServerManager(
 
         try {
             devices.forEach { device ->
-                startServer(device)
+                startServerForDevice(device)
             }
         } catch (exception: Exception) {
-            stopServers()
+            stopAllServers()
             throw exception
         }
     }
 
-    fun startServer(
+    fun startServerForDevice(
         device: Device
     ): AppiumDriverLocalService {
         val existingServer = servers[device.id]
@@ -45,7 +45,7 @@ class AppiumServerManager(
         return server
     }
 
-    fun getServer(
+    fun getServerForDevice(
         device: Device
     ): AppiumDriverLocalService {
         return servers[device.id]
@@ -55,8 +55,8 @@ class AppiumServerManager(
             )
     }
 
-    fun getServerUrl(device: Device): URL {
-        val server = getServer(device)
+    fun getServerUrlForDevice(device: Device): URL {
+        val server = getServerForDevice(device)
 
         check(server.isRunning) {
             "Appium server for device '${device.id}' is not running"
@@ -65,14 +65,14 @@ class AppiumServerManager(
         return server.url
     }
 
-    fun stopServer(device: Device) {
+    fun stopServerForDevice(device: Device) {
         val server = servers.remove(device.id)
             ?: return
 
         serverFactory.stopServerInstance(server)
     }
 
-    fun stopServers() {
+    fun stopAllServers() {
         val failures = mutableListOf<Throwable>()
 
         servers.entries
@@ -106,7 +106,7 @@ class AppiumServerManager(
         }
     }
 
-    fun isRunning(device: Device): Boolean {
+    fun isServerRunningForDevice(device: Device): Boolean {
         return servers[device.id]?.isRunning == true
     }
 
