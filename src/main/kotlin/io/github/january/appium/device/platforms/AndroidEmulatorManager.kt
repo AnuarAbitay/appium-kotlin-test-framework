@@ -69,7 +69,8 @@ object AndroidEmulatorManager {
                     "adb",
                     "-s",
                     device.udid,
-                    "wait-for-disconnect"
+                    "wait-for-disconnect",
+                    timeout = 30.seconds
                 )
 
                 check(disconnectResult.isSuccessful) {

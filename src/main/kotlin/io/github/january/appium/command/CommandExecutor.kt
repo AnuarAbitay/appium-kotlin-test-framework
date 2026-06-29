@@ -1,5 +1,8 @@
 package io.github.january.appium.command
 
+import io.github.january.appium.command.CommandResult.Companion.INTERRUPTED_EXIT_CODE
+import io.github.january.appium.command.CommandResult.Companion.START_FAILURE_EXIT_CODE
+import io.github.january.appium.command.CommandResult.Companion.TIMEOUT_EXIT_CODE
 import java.io.IOException
 import java.util.concurrent.TimeUnit.MILLISECONDS
 import java.util.concurrent.TimeUnit.SECONDS
@@ -7,10 +10,6 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 object CommandExecutor {
-
-    private const val COMMAND_START_FAILURE = -1
-    private const val COMMAND_TIMEOUT_EXIT_CODE = -2
-    private const val COMMAND_INTERRUPTED_EXIT_CODE = -3
 
     fun execute(
         vararg command: String,
@@ -49,7 +48,7 @@ object CommandExecutor {
                 outputThread.join(2_000)
 
                 return CommandResult(
-                    exitCode = COMMAND_TIMEOUT_EXIT_CODE,
+                    exitCode = TIMEOUT_EXIT_CODE,
                     output = buildString {
                         append("Command timed out after $timeout")
 
@@ -69,7 +68,7 @@ object CommandExecutor {
             )
         } catch (exception: IOException) {
             CommandResult(
-                exitCode = COMMAND_START_FAILURE,
+                exitCode = START_FAILURE_EXIT_CODE,
                 output = exception.message.orEmpty()
             )
         } catch (exception: InterruptedException) {
@@ -77,7 +76,7 @@ object CommandExecutor {
             Thread.currentThread().interrupt()
 
             CommandResult(
-                exitCode = COMMAND_INTERRUPTED_EXIT_CODE,
+                exitCode = INTERRUPTED_EXIT_CODE,
                 output = exception.message.orEmpty()
             )
         }

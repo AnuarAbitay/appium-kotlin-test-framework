@@ -107,7 +107,8 @@ object IOSSimulatorManager {
             "simctl",
             "bootstatus",
             device.udid,
-            "-b"
+            "-b",
+            timeout = 2.minutes
         )
 
         check(result.isSuccessful) {
