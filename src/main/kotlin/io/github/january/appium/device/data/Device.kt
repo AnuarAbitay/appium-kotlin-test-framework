@@ -11,7 +11,6 @@ data class Device(
     val isEmulator: Boolean = false,
 
     // Android
-    val avdName: String? = null,
     val avdPort: Int? = null,
     val systemPort: Int? = null,
     val chromedriverPort: Int? = null,

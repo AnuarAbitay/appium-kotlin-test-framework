@@ -1,4 +1,4 @@
-package io.github.january.appium.driver.options.android
+package io.github.january.appium.driver.options
 
 import io.appium.java_client.android.options.UiAutomator2Options
 import io.github.january.appium.device.data.Device
@@ -6,22 +6,34 @@ import java.io.File
 import java.time.Duration
 
 class AndroidOptionsFactory(
-    private val appPath: String
+    appPath: String,
+    private val language: String,
+    private val locale: String
 ) {
 
-    fun create(
-        device: Device,
-        language: String = DEFAULT_LANGUAGE,
-        locale: String = DEFAULT_LOCALE
-    ): UiAutomator2Options {
-        require(device.isAndroid) {
-            "Device '${device.id}' is not an Android device"
+    private val appFile = File(appPath).absoluteFile
+
+    init {
+        require(appPath.isNotBlank()) {
+            "Android application path must not be blank"
         }
 
-        val appFile = File(appPath)
-
         require(appFile.isFile) {
-            "Android application was not found: $appPath"
+            "Android application was not found: ${appFile.path}"
+        }
+
+        require(language.isNotBlank()) {
+            "Android language must not be blank"
+        }
+
+        require(locale.isNotBlank()) {
+            "Android locale must not be blank"
+        }
+    }
+
+    fun create(device: Device): UiAutomator2Options {
+        require(device.isAndroid) {
+            "Device '${device.id}' is not an Android device"
         }
 
         val appPackage = requireNotNull(device.appPackage) {
@@ -41,56 +53,56 @@ class AndroidOptionsFactory(
         }
 
         return UiAutomator2Options()
-            // Language
-            .setLanguage(language)
-            .setLocale(locale)
-
-            // Application
-            .setApp(appFile.absolutePath)
-            .setAppPackage(appPackage)
-            .setAppActivity(appActivity)
-            .setAppWaitPackage(appPackage)
-            .setAppWaitActivity(appActivity)
-            .setAppWaitForLaunch(true)
-            .setAppWaitDuration(Duration.ofSeconds(60))
-
-            // Device
             .setPlatformName(device.platformName)
             .setPlatformVersion(device.platformVersion)
             .setDeviceName(device.deviceName)
             .setUdid(device.udid)
             .setAutomationName(device.automationName)
 
-            // Application lifecycle
-            .setFullReset(true)
-            .setNoReset(false)
+            .setApp(appFile.path)
+            .setAppPackage(appPackage)
+            .setAppActivity(appActivity)
+            .setAppWaitPackage(appPackage)
+            .setAppWaitActivity(appActivity)
+            .setAppWaitForLaunch(true)
+            .setAppWaitDuration(APP_WAIT_TIMEOUT)
+
+            .setLanguage(language)
+            .setLocale(locale)
+
             .setAutoGrantPermissions(true)
 
-            // Emulator
-            .setGpsEnabled(true)
-            .setDisableWindowAnimation(true)
-            .setIsHeadless(device.isEmulator)
-            .setSkipUnlock(true)
-            .setIgnoreHiddenApiPolicyError(true)
-
-            // Timeouts
-            .setAdbExecTimeout(Duration.ofSeconds(180))
-            .setAndroidInstallTimeout(Duration.ofSeconds(300))
+            .setAdbExecTimeout(ADB_EXEC_TIMEOUT)
+            .setAndroidInstallTimeout(APP_INSTALL_TIMEOUT)
             .setUiautomator2ServerLaunchTimeout(
-                Duration.ofSeconds(120)
+                UIAUTOMATOR_SERVER_LAUNCH_TIMEOUT
             )
             .setUiautomator2ServerInstallTimeout(
-                Duration.ofSeconds(120)
+                UIAUTOMATOR_SERVER_INSTALL_TIMEOUT
             )
-            .setNewCommandTimeout(Duration.ofSeconds(1_800))
+            .setNewCommandTimeout(NEW_COMMAND_TIMEOUT)
 
-            // Parallel execution
             .setSystemPort(systemPort)
             .setChromedriverPort(chromedriverPort)
     }
 
     private companion object {
-        const val DEFAULT_LANGUAGE = "ru"
-        const val DEFAULT_LOCALE = "RU"
+        val APP_WAIT_TIMEOUT: Duration =
+            Duration.ofSeconds(60)
+
+        val ADB_EXEC_TIMEOUT: Duration =
+            Duration.ofSeconds(180)
+
+        val APP_INSTALL_TIMEOUT: Duration =
+            Duration.ofSeconds(300)
+
+        val UIAUTOMATOR_SERVER_LAUNCH_TIMEOUT: Duration =
+            Duration.ofSeconds(120)
+
+        val UIAUTOMATOR_SERVER_INSTALL_TIMEOUT: Duration =
+            Duration.ofSeconds(120)
+
+        val NEW_COMMAND_TIMEOUT: Duration =
+            Duration.ofMinutes(30)
     }
 }

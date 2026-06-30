@@ -2,7 +2,7 @@ package io.github.january.appium.driver.factory
 
 import io.appium.java_client.android.AndroidDriver
 import io.github.january.appium.device.data.Device
-import io.github.january.appium.driver.options.android.AndroidOptionsFactory
+import io.github.january.appium.driver.options.AndroidOptionsFactory
 import io.github.january.appium.server.AppiumServerManager
 
 class AndroidDriverFactory(
@@ -23,42 +23,20 @@ class AndroidDriverFactory(
         }
 
         val options = optionsFactory.create(device)
-
-        var driver: AndroidDriver? = null
+        val serverUrl = serverManager.getServerUrlForDevice(device)
 
         return try {
-            driver = AndroidDriver(
-                serverManager.getServerUrlForDevice(device),
+            AndroidDriver(
+                serverUrl,
                 options
             )
-
-            applyRuntimeSettings(driver)
-
-            driver
         } catch (exception: Exception) {
-            runCatching {
-                driver?.quit()
-            }
-
             throw IllegalStateException(
                 "Failed to create Android driver " +
-                        "for device '${device.id}'",
+                        "for device '${device.id}' " +
+                        "using Appium server '$serverUrl'",
                 exception
             )
         }
-    }
-
-    private fun applyRuntimeSettings(
-        driver: AndroidDriver
-    ) {
-        driver.setSettings(
-            mapOf<String, Any>(
-                "disableIdLocatorAutocompletion" to true,
-                "waitForIdleTimeout" to 0,
-                "waitForSelectorTimeout" to 5_000,
-                "actionAcknowledgmentTimeout" to 0,
-                "ignoreUnimportantViews" to true
-            )
-        )
     }
 }

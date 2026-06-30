@@ -1,4 +1,4 @@
-package io.github.january.appium.driver.options.ios
+package io.github.january.appium.driver.options
 
 import io.appium.java_client.ios.options.XCUITestOptions
 import io.github.january.appium.device.data.Device
@@ -7,27 +7,34 @@ import java.time.Duration
 
 class IOSOptionsFactory(
     private val simulatorAppPath: String,
-    private val realDeviceAppPath: String
+    private val realDeviceAppPath: String,
+    private val language: String,
+    private val locale: String
 ) {
 
-    fun create(
-        device: Device,
-        language: String = DEFAULT_LANGUAGE,
-        locale: String = DEFAULT_LOCALE
-    ): XCUITestOptions {
+    init {
+        require(language.isNotBlank()) {
+            "iOS language must not be blank"
+        }
+
+        require(locale.isNotBlank()) {
+            "iOS locale must not be blank"
+        }
+    }
+
+    fun create(device: Device): XCUITestOptions {
         require(device.isIos) {
             "Device '${device.id}' is not an iOS device"
         }
 
-        val appPath = resolveAppPath(device)
-        val app = File(appPath)
-
-        require(app.exists()) {
-            "iOS application was not found: $appPath"
-        }
+        val app = resolveApplication(device)
 
         val bundleId = requireNotNull(device.bundleId) {
             "bundleId is required for iOS device '${device.id}'"
+        }.also { value ->
+            require(value.isNotBlank()) {
+                "bundleId must not be blank for iOS device '${device.id}'"
+            }
         }
 
         val wdaLocalPort = requireNotNull(device.wdaLocalPort) {
@@ -35,65 +42,66 @@ class IOSOptionsFactory(
         }
 
         return XCUITestOptions()
-            // Device
             .setPlatformName(device.platformName)
             .setPlatformVersion(device.platformVersion)
             .setDeviceName(device.deviceName)
             .setAutomationName(device.automationName)
             .setUdid(device.udid)
 
-            // Application
             .setApp(app.absolutePath)
             .setBundleId(bundleId)
 
-            // Localization
             .setLanguage(language)
-            .setLocale(
-                normalizeLocale(
-                    language = language,
-                    locale = locale
-                )
-            )
+            .setLocale(normalizeLocale())
 
-            // Application lifecycle
-            .setNoReset(false)
-            .setFullReset(false)
-
-            // Parallel execution
             .setWdaLocalPort(wdaLocalPort)
-
-            // Session
-            .setNewCommandTimeout(Duration.ofMinutes(30))
-
-            // WebDriverAgent
-            .amend("appium:useNewWDA", false)
-            .amend("appium:wdaLaunchTimeout", 120_000)
-            .amend("appium:wdaConnectionTimeout", 240_000)
-            .amend("appium:wdaStartupRetries", 4)
-            .amend("appium:wdaStartupRetryInterval", 20_000)
+            .setNewCommandTimeout(NEW_COMMAND_TIMEOUT)
     }
 
-    private fun resolveAppPath(device: Device): String {
-        return if (device.isEmulator) {
+    private fun resolveApplication(device: Device): File {
+        val configuredPath = if (device.isEmulator) {
             simulatorAppPath
         } else {
             realDeviceAppPath
         }
+
+        val deviceType = if (device.isEmulator) {
+            "iOS Simulator"
+        } else {
+            "iOS real device"
+        }
+
+        require(configuredPath.isNotBlank()) {
+            "$deviceType application path is not configured"
+        }
+
+        val app = File(configuredPath).absoluteFile
+
+        require(app.exists()) {
+            "$deviceType application was not found: ${app.path}"
+        }
+
+        return app
     }
 
-    private fun normalizeLocale(
-        language: String,
-        locale: String
-    ): String {
-        return if ("_" in locale) {
-            locale
+    private fun normalizeLocale(): String {
+        val normalizedLanguage = language
+            .trim()
+            .lowercase()
+
+        val normalizedLocale = locale
+            .trim()
+            .replace('-', '_')
+
+        return if ('_' in normalizedLocale) {
+            normalizedLocale
         } else {
-            "${language.lowercase()}_${locale.uppercase()}"
+            "${normalizedLanguage}_${normalizedLocale.uppercase()}"
         }
     }
 
     private companion object {
-        const val DEFAULT_LANGUAGE = "ru"
-        const val DEFAULT_LOCALE = "RU"
+        val NEW_COMMAND_TIMEOUT: Duration =
+            Duration.ofMinutes(30)
     }
 }

@@ -12,20 +12,117 @@ class AppiumServerManager(
     private val servers =
         ConcurrentHashMap<String, AppiumDriverLocalService>()
 
-    fun startServersForDevices(devices: List<Device>) {
+    private val lifecycleLock = Any()
+
+    fun startServersForDevices(
+        devices: List<Device>
+    ) {
+        require(devices.isNotEmpty()) {
+            "At least one device is required to start Appium servers"
+        }
+
         validateDevices(devices)
 
-        try {
-            devices.forEach { device ->
-                startServerForDevice(device)
+        synchronized(lifecycleLock) {
+            val startedDeviceIds = mutableListOf<String>()
+
+            try {
+                devices.forEach { device ->
+                    val alreadyRunning =
+                        servers[device.id]?.isRunning == true
+
+                    if (!alreadyRunning) {
+                        startServerForDeviceInternal(device)
+                        startedDeviceIds += device.id
+                    }
+                }
+            } catch (startException: Exception) {
+                rollbackStartedServers(
+                    deviceIds = startedDeviceIds,
+                    startException = startException
+                )
+
+                throw startException
             }
-        } catch (exception: Exception) {
-            stopAllServers()
-            throw exception
         }
     }
 
     fun startServerForDevice(
+        device: Device
+    ): AppiumDriverLocalService {
+        return synchronized(lifecycleLock) {
+            startServerForDeviceInternal(device)
+        }
+    }
+
+    fun getServerForDevice(
+        device: Device
+    ): AppiumDriverLocalService {
+        val server = servers[device.id]
+            ?: error(
+                "Appium server for device '${device.id}' " +
+                        "has not been started"
+            )
+
+        check(server.isRunning) {
+            "Appium server for device '${device.id}' is not running"
+        }
+
+        return server
+    }
+
+    fun getServerUrlForDevice(
+        device: Device
+    ): URL {
+        return getServerForDevice(device).url
+    }
+
+    fun isServerRunningForDevice(
+        device: Device
+    ): Boolean {
+        return servers[device.id]?.isRunning == true
+    }
+
+    fun stopServerForDevice(
+        device: Device
+    ) {
+        synchronized(lifecycleLock) {
+            stopServerForDeviceInternal(device.id)
+        }
+    }
+
+    fun stopAllServers() {
+        synchronized(lifecycleLock) {
+            val failures = mutableListOf<Throwable>()
+
+            servers.keys
+                .toList()
+                .asReversed()
+                .forEach { deviceId ->
+                    try {
+                        stopServerForDeviceInternal(deviceId)
+                    } catch (exception: Exception) {
+                        failures += IllegalStateException(
+                            "Failed to stop Appium server " +
+                                    "for device '$deviceId'",
+                            exception
+                        )
+                    }
+                }
+
+            if (failures.isNotEmpty()) {
+                val exception = IllegalStateException(
+                    "Failed to stop ${failures.size} Appium server(s)"
+                )
+
+                failures.forEach(exception::addSuppressed)
+
+                throw exception
+            }
+        }
+    }
+
+    private fun startServerForDeviceInternal(
         device: Device
     ): AppiumDriverLocalService {
         val existingServer = servers[device.id]
@@ -35,7 +132,7 @@ class AppiumServerManager(
         }
 
         if (existingServer != null) {
-            servers.remove(device.id)
+            servers.remove(device.id, existingServer)
         }
 
         val server = serverFactory.createAndStartServer(device)
@@ -45,89 +142,54 @@ class AppiumServerManager(
         return server
     }
 
-    fun getServerForDevice(
-        device: Device
-    ): AppiumDriverLocalService {
-        return servers[device.id]
-            ?: error(
-                "Appium server for device '${device.id}' " +
-                        "has not been started"
-            )
-    }
-
-    fun getServerUrlForDevice(device: Device): URL {
-        val server = getServerForDevice(device)
-
-        check(server.isRunning) {
-            "Appium server for device '${device.id}' is not running"
-        }
-
-        return server.url
-    }
-
-    fun stopServerForDevice(device: Device) {
-        val server = servers.remove(device.id)
+    private fun stopServerForDeviceInternal(
+        deviceId: String
+    ) {
+        val server = servers[deviceId]
             ?: return
 
         serverFactory.stopServerInstance(server)
+
+        servers.remove(deviceId, server)
     }
 
-    fun stopAllServers() {
-        val failures = mutableListOf<Throwable>()
-
-        servers.entries
-            .toList()
-            .forEach { (deviceId, server) ->
+    private fun rollbackStartedServers(
+        deviceIds: List<String>,
+        startException: Exception
+    ) {
+        deviceIds
+            .asReversed()
+            .forEach { deviceId ->
                 try {
-                    serverFactory.stopServerInstance(server)
-                } catch (exception: Exception) {
-                    failures += IllegalStateException(
-                        "Failed to stop Appium server " +
-                                "for device '$deviceId'",
-                        exception
-                    )
-                } finally {
-                    servers.remove(deviceId)
+                    stopServerForDeviceInternal(deviceId)
+                } catch (cleanupException: Exception) {
+                    startException.addSuppressed(cleanupException)
                 }
             }
-
-        check(failures.isEmpty()) {
-            buildString {
-                append("Failed to stop ")
-                append(failures.size)
-                append(" Appium server(s): ")
-
-                append(
-                    failures.joinToString { failure ->
-                        failure.message.orEmpty()
-                    }
-                )
-            }
-        }
     }
 
-    fun isServerRunningForDevice(device: Device): Boolean {
-        return servers[device.id]?.isRunning == true
-    }
-
-    private fun validateDevices(devices: List<Device>) {
-        val duplicatedIds = devices
-            .groupBy(Device::id)
-            .filterValues { it.size > 1 }
+    private fun validateDevices(
+        devices: List<Device>
+    ) {
+        val duplicateIds = devices
+            .groupingBy(Device::id)
+            .eachCount()
+            .filterValues { count -> count > 1 }
             .keys
 
-        require(duplicatedIds.isEmpty()) {
-            "Duplicate device ids: ${duplicatedIds.joinToString()}"
+        require(duplicateIds.isEmpty()) {
+            "Duplicate device ids: ${duplicateIds.joinToString()}"
         }
 
-        val duplicatedPorts = devices
-            .groupBy(Device::serverPort)
-            .filterValues { it.size > 1 }
+        val duplicatePorts = devices
+            .groupingBy(Device::serverPort)
+            .eachCount()
+            .filterValues { count -> count > 1 }
             .keys
 
-        require(duplicatedPorts.isEmpty()) {
+        require(duplicatePorts.isEmpty()) {
             "Duplicate Appium server ports: " +
-                    duplicatedPorts.joinToString()
+                    duplicatePorts.joinToString()
         }
     }
 }

@@ -2,11 +2,16 @@ package io.github.january.appium.device.platforms
 
 import io.github.january.appium.command.CommandExecutor
 import io.github.january.appium.device.data.AdbDeviceState
-import io.github.january.appium.device.data.AdbDeviceState.*
+import io.github.january.appium.device.data.AdbDeviceState.ABSENT
+import io.github.january.appium.device.data.AdbDeviceState.OFFLINE
+import io.github.january.appium.device.data.AdbDeviceState.ONLINE
+import io.github.january.appium.device.data.AdbDeviceState.UNAUTHORIZED
+import io.github.january.appium.device.data.AdbDeviceState.UNKNOWN
 import io.github.january.appium.device.data.Device
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration
@@ -16,71 +21,36 @@ import kotlin.time.Duration.Companion.seconds
 
 object AndroidEmulatorManager {
 
-    fun bootEmulators(devices: List<Device>) = runBlocking {
-        val androidEmulators = devices.filter {
-            it.isAndroid && it.isEmulator
+    fun bootEmulators(
+        devices: List<Device>
+    ) = runBlocking {
+        val androidEmulators = devices.filter { device ->
+            device.isAndroid && device.isEmulator
         }
+
+        if (androidEmulators.isEmpty()) {
+            return@runBlocking
+        }
+
+        shutdownEmulatorsInternal(androidEmulators)
 
         androidEmulators
             .map { device ->
                 async(IO) {
-                    ensureEmulatorStarted(device)
-
-                    waitUntilReady(
-                        udid = device.udid,
-                        timeout = 4.minutes,
-                        pollInterval = 2.seconds
-                    )
-
-                    setDeviceName(
-                        udid = device.udid,
-                        name = device.deviceName
-                    )
-
-                    prepareDevice(device.udid)
-                    resetNetworkViaWifi(device.udid)
+                    startAndPrepareEmulator(device)
                 }
             }
             .awaitAll()
     }
 
-    fun shutdownEmulators(devices: List<Device>) {
-        devices
-            .filter { it.isAndroid && it.isEmulator }
-            .forEach { device ->
-                val shutdownResult = CommandExecutor.execute(
-                    "adb",
-                    "-s",
-                    device.udid,
-                    "emu",
-                    "kill"
-                )
+    fun shutdownEmulators(
+        devices: List<Device>
+    ) = runBlocking {
+        val androidEmulators = devices.filter { device ->
+            device.isAndroid && device.isEmulator
+        }
 
-                check(
-                    shutdownResult.isSuccessful ||
-                            getAdbDeviceState(device.udid) == ABSENT
-                ) {
-                    "Failed to stop Android emulator '${device.id}'. " +
-                            "Exit code: ${shutdownResult.exitCode}. " +
-                            "Output: ${shutdownResult.output}"
-                }
-
-                val disconnectResult = CommandExecutor.execute(
-                    "adb",
-                    "-s",
-                    device.udid,
-                    "wait-for-disconnect",
-                    timeout = 30.seconds
-                )
-
-                check(disconnectResult.isSuccessful) {
-                    "Android emulator '${device.id}' did not disconnect. " +
-                            "Exit code: ${disconnectResult.exitCode}. " +
-                            "Output: ${disconnectResult.output}"
-                }
-            }
-
-        restartAdbServer()
+        shutdownEmulatorsInternal(androidEmulators)
     }
 
     fun waitForAvdReady(
@@ -94,106 +64,90 @@ object AndroidEmulatorManager {
         )
     }
 
-    private suspend fun waitUntilReady(
-        udid: String,
-        timeout: Duration,
-        pollInterval: Duration
-    ) {
-        val isReady = waitUntil(
-            timeout = timeout,
-            pollInterval = pollInterval
-        ) {
-            isDeviceReady(udid)
-        }
-
-        check(isReady) {
-            "Android emulator '$udid' was not ready within $timeout"
-        }
-    }
-
-    private fun isDeviceReady(udid: String): Boolean {
-        return isAdbConnected(udid) &&
-                isBootCompleted(udid) &&
-                isPackageManagerReady(udid)
-    }
-
-    private fun isAdbConnected(udid: String): Boolean {
-        val result = CommandExecutor.execute(
-            "adb",
-            "-s",
-            udid,
-            "get-state"
-        )
-
-        return result.isSuccessful &&
-                result.output == "device"
-    }
-
-    private fun isBootCompleted(udid: String): Boolean {
-        val result = CommandExecutor.execute(
-            "adb",
-            "-s",
-            udid,
-            "shell",
-            "getprop",
-            "sys.boot_completed"
-        )
-
-        return result.isSuccessful &&
-                result.output == "1"
-    }
-
-    private fun isPackageManagerReady(udid: String): Boolean {
-        val result = CommandExecutor.execute(
-            "adb",
-            "-s",
-            udid,
-            "shell",
-            "pm",
-            "list",
-            "packages"
-        )
-
-        return result.isSuccessful
-    }
-
-    private fun getAdbDeviceState(udid: String): AdbDeviceState {
-        val result = CommandExecutor.execute(
-            "adb",
-            "devices"
-        )
-
-        check(result.isSuccessful) {
-            "Failed to get Android devices. " +
-                    "Exit code: ${result.exitCode}. " +
-                    "Output: ${result.output}"
-        }
-
-        val deviceLine = result.output
-            .lineSequence()
-            .map(String::trim)
-            .firstOrNull { line ->
-                line.substringBefore("\t") == udid
+    private suspend fun shutdownEmulatorsInternal(
+        devices: List<Device>
+    ) = coroutineScope {
+        devices
+            .map { device ->
+                async(IO) {
+                    shutdownEmulator(device)
+                }
             }
-            ?: return ABSENT
+            .awaitAll()
+    }
 
-        val state = deviceLine
-            .substringAfter("\t", missingDelimiterValue = "")
-            .trim()
-            .lowercase()
+    private suspend fun startAndPrepareEmulator(
+        device: Device
+    ) {
+        check(getAdbDeviceState(device.udid) == ABSENT) {
+            "Android emulator '${device.id}' is still visible in ADB " +
+                    "before startup"
+        }
 
-        return when (state) {
-            "device" -> ONLINE
-            "offline" -> OFFLINE
-            "unauthorized" -> UNAUTHORIZED
-            else -> UNKNOWN
+        startEmulator(device)
+
+        waitUntilReady(
+            udid = device.udid,
+            timeout = BOOT_TIMEOUT,
+            pollInterval = BOOT_POLL_INTERVAL
+        )
+
+        setDeviceName(
+            udid = device.udid,
+            name = device.deviceName
+        )
+
+        prepareDevice(device.udid)
+        resetNetworkViaWifi(device.udid)
+    }
+
+    private suspend fun shutdownEmulator(
+        device: Device
+    ) {
+        val currentState = getAdbDeviceState(device.udid)
+
+        if (currentState == ABSENT) {
+            return
+        }
+
+        val shutdownResult = CommandExecutor.execute(
+            "adb",
+            "-s",
+            device.udid,
+            "emu",
+            "kill",
+            timeout = EMULATOR_KILL_COMMAND_TIMEOUT
+        )
+
+        val stateAfterCommand = getAdbDeviceState(device.udid)
+
+        check(
+            shutdownResult.isSuccessful ||
+                    stateAfterCommand == ABSENT
+        ) {
+            "Failed to stop Android emulator '${device.id}'. " +
+                    "ADB state: $currentState. " +
+                    "Exit code: ${shutdownResult.exitCode}. " +
+                    "Output: ${shutdownResult.output}"
+        }
+
+        val disconnected = waitUntil(
+            timeout = SHUTDOWN_TIMEOUT,
+            pollInterval = SHUTDOWN_POLL_INTERVAL
+        ) {
+            getAdbDeviceState(device.udid) == ABSENT
+        }
+
+        check(disconnected) {
+            "Android emulator '${device.id}' did not disconnect " +
+                    "within $SHUTDOWN_TIMEOUT"
         }
     }
 
-    private fun startEmulator(device: Device) {
-        val avdName = requireNotNull(device.avdName) {
-            "avdName is required for Android emulator '${device.id}'"
-        }
+    private fun startEmulator(
+        device: Device
+    ) {
+        val avdName = device.deviceName
 
         val consolePort = requireNotNull(device.avdPort) {
             "avdPort is required for Android emulator '${device.id}'"
@@ -245,6 +199,116 @@ object AndroidEmulatorManager {
         )
     }
 
+    private suspend fun waitUntilReady(
+        udid: String,
+        timeout: Duration,
+        pollInterval: Duration
+    ) {
+        val isReady = waitUntil(
+            timeout = timeout,
+            pollInterval = pollInterval
+        ) {
+            isDeviceReady(udid)
+        }
+
+        check(isReady) {
+            "Android emulator '$udid' was not ready within $timeout. " +
+                    "Current ADB state: ${getAdbDeviceState(udid)}"
+        }
+    }
+
+    private fun isDeviceReady(
+        udid: String
+    ): Boolean {
+        return isAdbConnected(udid) &&
+                isBootCompleted(udid) &&
+                isPackageManagerReady(udid)
+    }
+
+    private fun isAdbConnected(
+        udid: String
+    ): Boolean {
+        val result = CommandExecutor.execute(
+            "adb",
+            "-s",
+            udid,
+            "get-state"
+        )
+
+        return result.isSuccessful &&
+                result.output.trim() == "device"
+    }
+
+    private fun isBootCompleted(
+        udid: String
+    ): Boolean {
+        val result = CommandExecutor.execute(
+            "adb",
+            "-s",
+            udid,
+            "shell",
+            "getprop",
+            "sys.boot_completed"
+        )
+
+        return result.isSuccessful &&
+                result.output.trim() == "1"
+    }
+
+    private fun isPackageManagerReady(
+        udid: String
+    ): Boolean {
+        val result = CommandExecutor.execute(
+            "adb",
+            "-s",
+            udid,
+            "shell",
+            "pm",
+            "path",
+            "android"
+        )
+
+        return result.isSuccessful &&
+                result.output.contains("package:")
+    }
+
+    private fun getAdbDeviceState(
+        udid: String
+    ): AdbDeviceState {
+        val result = CommandExecutor.execute(
+            "adb",
+            "devices"
+        )
+
+        check(result.isSuccessful) {
+            "Failed to get Android devices. " +
+                    "Exit code: ${result.exitCode}. " +
+                    "Output: ${result.output}"
+        }
+
+        val deviceLine = result.output
+            .lineSequence()
+            .map(String::trim)
+            .firstOrNull { line ->
+                line.startsWith("$udid\t") ||
+                        line.startsWith("$udid ")
+            }
+            ?: return ABSENT
+
+        val state = deviceLine
+            .removePrefix(udid)
+            .trim()
+            .substringBefore(' ')
+            .lowercase()
+
+        return when (state) {
+            "device" -> ONLINE
+            "offline" -> OFFLINE
+            "unauthorized" -> UNAUTHORIZED
+            else -> UNKNOWN
+        }
+    }
+
     private fun setDeviceName(
         udid: String,
         name: String
@@ -268,7 +332,9 @@ object AndroidEmulatorManager {
         }
     }
 
-    private fun prepareDevice(udid: String) {
+    private fun prepareDevice(
+        udid: String
+    ) {
         val commands = listOf(
             listOf(
                 "shell",
@@ -352,7 +418,9 @@ object AndroidEmulatorManager {
         }
     }
 
-    private suspend fun resetNetworkViaWifi(udid: String) {
+    private suspend fun resetNetworkViaWifi(
+        udid: String
+    ) {
         val disableResult = CommandExecutor.execute(
             "adb",
             "-s",
@@ -367,7 +435,11 @@ object AndroidEmulatorManager {
             return
         }
 
-        if (!waitForWifiStatus(udid, expectedStatus = "disabled")) {
+        if (!waitForWifiStatus(
+                udid = udid,
+                expectedStatus = "disabled"
+            )
+        ) {
             return
         }
 
@@ -385,7 +457,11 @@ object AndroidEmulatorManager {
             return
         }
 
-        if (!waitForWifiStatus(udid, expectedStatus = "enabled")) {
+        if (!waitForWifiStatus(
+                udid = udid,
+                expectedStatus = "enabled"
+            )
+        ) {
             return
         }
 
@@ -423,7 +499,9 @@ object AndroidEmulatorManager {
         }
     }
 
-    private fun getConnectedSsid(udid: String): String? {
+    private fun getConnectedSsid(
+        udid: String
+    ): String? {
         val result = CommandExecutor.execute(
             "adb",
             "-s",
@@ -476,47 +554,13 @@ object AndroidEmulatorManager {
             delay(pollInterval)
         }
 
-        return false
+        return condition()
     }
 
-    private fun ensureEmulatorStarted(device: Device) {
-        when (val state = getAdbDeviceState(device.udid)) {
-            ABSENT -> startEmulator(device)
+    private val BOOT_TIMEOUT = 4.minutes
+    private val BOOT_POLL_INTERVAL = 2.seconds
 
-            ONLINE,
-            OFFLINE -> return
-
-            UNAUTHORIZED -> error(
-                "Android emulator '${device.id}' is unauthorized in ADB"
-            )
-
-            UNKNOWN -> error(
-                "Android emulator '${device.id}' has unknown ADB state: $state"
-            )
-        }
-    }
-
-    fun restartAdbServer() {
-        val stopResult = CommandExecutor.execute(
-            "adb",
-            "kill-server"
-        )
-
-        check(stopResult.isSuccessful) {
-            "Failed to stop ADB server. " +
-                    "Exit code: ${stopResult.exitCode}. " +
-                    "Output: ${stopResult.output}"
-        }
-
-        val startResult = CommandExecutor.execute(
-            "adb",
-            "start-server"
-        )
-
-        check(startResult.isSuccessful) {
-            "Failed to start ADB server. " +
-                    "Exit code: ${startResult.exitCode}. " +
-                    "Output: ${startResult.output}"
-        }
-    }
+    private val SHUTDOWN_TIMEOUT = 30.seconds
+    private val SHUTDOWN_POLL_INTERVAL = 500.milliseconds
+    private val EMULATOR_KILL_COMMAND_TIMEOUT = 15.seconds
 }
